@@ -1,74 +1,134 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Audio Byte Transmitter</title>
+  <title>Audio Byte Receiver</title>
   <style>
-    body { font-family: sans-serif; background: #111; color: #eee; padding: 20px; }
-    textarea { width: 100%; height: 100px; }
-    button { padding: 10px 20px; font-size: 16px; }
+    body {
+      font-family: sans-serif;
+      background: #111;
+      color: #eee;
+      padding: 20px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      margin-top: 10px;
+    }
+    #output {
+      white-space: pre-wrap;
+      font-family: monospace;
+      background: #222;
+      padding: 10px;
+      margin-top: 20px;
+      border-radius: 5px;
+      min-height: 200px;
+    }
   </style>
 </head>
 <body>
-  <h1>🔊 Loud Audio Byte Communicator</h1>
-  <p>Enter text to transmit via sound (audible byte frequency modulation):</p>
-  <textarea id="textInput" placeholder="Enter message here..."></textarea><br><br>
-  <button onclick="sendText()">Transmit</button>
+  <h1>🎧 Audio Byte Receiver</h1>
+  <p>This tool listens via your microphone and decodes audible byte tones.</p>
+  <button onclick="startListening()">Start Listening</button>
+
+  <div id="output">Waiting for transmission...</div>
 
   <script>
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let outputDiv = document.getElementById("output");
+    let receiving = false;
+    let receivedBytes = [];
+    let lastByteTime = 0;
 
-    function playTone(frequency, duration) {
-      return new Promise((resolve) => {
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
-        oscillator.frequency.value = frequency;
-        oscillator.type = 'sine';
-
-        // Apply gain ramping for smoother start/end of tones
-        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-        gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01); // Fade in
-        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration / 1000 - 0.01); // Fade out
-
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-
-        oscillator.start();
-        oscillator.stop(audioCtx.currentTime + duration / 1000);
-
-        // Resolve the promise when the tone has finished playing
-        oscillator.onended = resolve;
-      });
-    }
-
-    function byteToFrequency(byte) {
-      return 1000 + byte * 15;  // Map 0-255 to 1000–4845 Hz
-    }
-
-    async function sendBytes(bytes) {
-      // Start frame marker frequency around 10,000 Hz (receiver expects 9900-10050 Hz)
-      await playTone(10000, 150);
-
-      for (let byte of bytes) {
-        const freq = byteToFrequency(byte);
-        await playTone(freq, 100);
-        await new Promise(r => setTimeout(r, 20)); // 100ms tone + 20ms pause
+    async function startListening() {
+      // Check for AudioContext support
+      if (!window.AudioContext && !window.webkitAudioContext) {
+          alert('Web Audio API is not supported in this browser.');
+          return;
       }
+      
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
 
-      // End frame marker frequency around 8900 Hz (receiver expects 8800-8950 Hz)
-      await playTone(8900, 150);
-    }
+        analyser.fftSize = 2048;
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
 
-    function stringToBytes(text) {
-      return new TextEncoder().encode(text);
-    }
+        source.connect(analyser);
 
-    function sendText() {
-      const text = document.getElementById("textInput").value;
-      if (!text) {
-        alert("Please enter some text to transmit.");
-        return;
+        function getDominantFrequency() {
+          analyser.getByteFrequencyData(dataArray);
+          let maxIndex = 0;
+          for (let i = 1; i < bufferLength; i++) {
+            if (dataArray[i] > dataArray[maxIndex]) {
+              maxIndex = i;
+            }
+          }
+          const frequency = maxIndex * audioCtx.sampleRate / analyser.fftSize;
+          return frequency;
+        }
+
+        // This function must accurately reverse the byteToFrequency from the transmitter
+        function frequencyToByte(freq) {
+          const byte = Math.round((freq - 1000) / 15);
+          // Allow for slight deviation due to real-world audio inaccuracies
+          const expected = 1000 + byte * 15;
+          const diff = Math.abs(freq - expected);
+          return (diff < 7 && byte >= 0 && byte <= 255) ? byte : null;
+        }
+
+        function decode() {
+          const freq = getDominantFrequency();
+          const now = performance.now();
+
+          // Frame markers
+          // Start marker frequency: 10000 Hz (expected range 9900-10050)
+          if (freq > 9900 && freq < 10050) {
+            if (!receiving) {
+              receiving = true;
+              receivedBytes = [];
+              outputDiv.textContent += "\n[START FRAME]\n";
+            }
+            return requestAnimationFrame(decode);
+          // End marker frequency: 8900 Hz (expected range 8800-8950)
+          } else if (freq > 8800 && freq < 8950) {
+            if (receiving) {
+              receiving = false;
+              try {
+                const text = new TextDecoder().decode(Uint8Array.from(receivedBytes));
+                outputDiv.textContent += `Received: ${text}\n[END FRAME]\n`;
+              } catch (e) {
+                outputDiv.textContent += `Error decoding: ${e.message}\n[END FRAME]\n`;
+              }
+              receivedBytes = [];
+            }
+            return requestAnimationFrame(decode);
+          }
+
+          // Byte detection (only when actively receiving a frame)
+          if (receiving) {
+            const byte = frequencyToByte(freq);
+            const timeSinceLast = now - lastByteTime;
+
+            // Only add a byte if it's valid and a sufficient time has passed since the last one
+            // This prevents duplicate readings for a single tone
+            if (byte !== null && timeSinceLast > 200) { // Transmitter sends tones for 100ms with 20ms pause, so 120ms per byte. 200ms gives buffer.
+              receivedBytes.push(byte);
+              lastByteTime = now;
+              // Optional: display raw bytes for debugging
+              // outputDiv.textContent += `Byte: ${byte} Freq: ${freq.toFixed(0)}\n`; 
+            }
+          }
+
+          requestAnimationFrame(decode);
+        }
+
+        decode(); // Start the decoding loop
+      } catch (err) {
+        outputDiv.textContent = `Error accessing microphone: ${err.message}. Please ensure microphone access is granted.`;
+        console.error("Error accessing microphone:", err);
       }
-      sendBytes(stringToBytes(text));
     }
   </script>
 </body>
