@@ -24,9 +24,10 @@
         oscillator.frequency.value = frequency;
         oscillator.type = 'sine';
 
+        // Apply gain ramping for smoother start/end of tones
         gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
-        gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01);
-        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration / 1000 - 0.01);
+        gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01); // Fade in
+        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration / 1000 - 0.01); // Fade out
 
         oscillator.connect(gainNode);
         gainNode.connect(audioCtx.destination);
@@ -34,6 +35,7 @@
         oscillator.start();
         oscillator.stop(audioCtx.currentTime + duration / 1000);
 
+        // Resolve the promise when the tone has finished playing
         oscillator.onended = resolve;
       });
     }
@@ -49,7 +51,7 @@
       for (let byte of bytes) {
         const freq = byteToFrequency(byte);
         await playTone(freq, 100);
-        await new Promise(r => setTimeout(r, 20)); // pause between tones
+        await new Promise(r => setTimeout(r, 20)); // 100ms tone + 20ms pause
       }
 
       // End frame marker frequency around 8900 Hz (receiver expects 8800-8950 Hz)
