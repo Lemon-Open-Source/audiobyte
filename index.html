@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Audio Byte Transmitter</title>
+  <style>
+    body { font-family: sans-serif; background: #111; color: #eee; padding: 20px; }
+    textarea { width: 100%; height: 100px; }
+    button { padding: 10px 20px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h1>🔊 Loud Audio Byte Communicator</h1>
+  <p>Enter text to transmit via sound (audible byte frequency modulation):</p>
+  <textarea id="textInput" placeholder="Enter message here..."></textarea><br><br>
+  <button onclick="sendText()">Transmit</button>
+
+  <script>
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function playTone(frequency, duration) {
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'sine';
+      gainNode.gain.value = 0.5;
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + duration / 1000);
+    }
+
+    function byteToFrequency(byte) {
+      return 1000 + byte * 15;  // Map 0-255 to 1000–4845 Hz
+    }
+
+    async function sendBytes(bytes) {
+      for (let byte of bytes) {
+        const freq = byteToFrequency(byte);
+        playTone(freq, 100);
+        await new Promise(resolve => setTimeout(resolve, 120)); // 100ms tone + 20ms pause
+      }
+    }
+
+    function stringToBytes(text) {
+      return new TextEncoder().encode(text);
+    }
+
+    function sendText() {
+      const text = document.getElementById("textInput").value;
+      const bytes = stringToBytes(text);
+      sendBytes(bytes);
+    }
+  </script>
+</body>
+</html>
